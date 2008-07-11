@@ -186,6 +186,49 @@
               :eof)
           next-byte))))
                       
+
+
+(defmethod stream-read-char ((stream gzip-input-stream))
+  "Reads the next character from the given STREAM.
+
+Returns :eof when end of file is reached."
+  (let ((in-byte (read-byte stream nil nil)))
+    (if in-byte
+	(code-char in-byte)
+	:eof)))
+
+
+(defmethod stream-read-line ((stream gzip-input-stream))
+  "Reads the next line from the given gzip-input stream. The #\Newline
+is used as a line separator.
+
+Returns (STR . EOF-P). EOF-P is T when of end of file is reached."
+
+  (declare (ignore recursive-p))
+  (let ((res (make-string 80))
+	(len 80)
+	(index 0))
+    (loop
+       (let ((ch (read-char stream nil nil)))
+	 (cond
+	   ;; there is some character
+	   (ch
+	    (when (char= ch #\newline)
+	      (return (values (subseq res 0 index) nil)))
+	    (when (= index len)
+	      (setq len (* len 2))
+	      (let ((new (make-string len)))
+		(replace new res)
+		(setq res new)))
+	    (setf (schar res index) ch)
+	    (incf index))
+	   ;; index is zero, and character is zero
+	   ((zerop index)
+	    (return (values nil t)))
+	   ;; end of file
+	   (t
+	    (return (values (subseq res 0 index) t))))))))
+
 (defmethod stream-listen ((stream gzip-input-stream))
   (listen (underfile-of stream)))
 
