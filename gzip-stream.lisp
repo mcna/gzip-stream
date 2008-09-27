@@ -15,116 +15,36 @@
    (crc-low :initform #xFFFF)
    (compress-buffer :initarg :buffer :accessor compress-buffer)))
 
-; from salza's examples/gzip.lisp
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (defconstant +gzip-signature+
-    (if (boundp '+gzip-signature+)
-        (symbol-value '+gzip-signature+)
-        #(#x1F #x8B))))
-
-(defconstant +gzip-deflate-compression+ 8)
-(defconstant +gzip-flags+ 0)
-
-(defconstant +gzip-fast-compression+ 4)
-(defconstant +gzip-unix-os+ 3)
-
-(defun write-gzip-header (stream)
-  (write-sequence +gzip-signature+ stream)
-  (write-byte +gzip-deflate-compression+ stream)
-  (write-byte +gzip-flags+ stream)
-  ;; mtime
-  (write-sequence #(0 0 0 0) stream)
-  (write-byte +gzip-fast-compression+ stream)
-  (write-byte +gzip-unix-os+ stream))
-
 (defmethod initialize-instance :after ((stream gzip-output-stream) &rest initargs &key)
   (declare (ignore initargs))
-  (let* ((compress-buffer (make-array +buffer-size+ :element-type 'octet))
-         (callback (lambda (deflate-stream)
-                     (write-sequence compress-buffer
+  (let* ((callback (lambda (buffer end)
+                     (write-sequence buffer
                                      (under-file stream)
                                      :start 0
-                                     :end (salza-deflate:deflate-stream-pos deflate-stream))
-                     (setf (salza-deflate:deflate-stream-pos deflate-stream) 0))))
-    (setf (deflate-stream stream) 
-          (salza-deflate:make-deflate-stream compress-buffer
-                                             :callback callback))
-    (write-gzip-header (slot-value stream 'underlying-file))
-    (salza-deflate:start-deflate-stream (deflate-stream stream))))
-
-(defun gzip-stream-output (stream bytes-written)
-  (declare (type fixnum bytes-written))
-  (with-slots (input-buffer size crc-high crc-low deflate-stream) stream
-    (incf (the fixnum size) bytes-written)
-    (salza-deflate:deflate-write-sequence
-     input-buffer deflate-stream :end bytes-written)
-    (multiple-value-bind (tmp-crc-high tmp-crc-low)
-        (salza-deflate:crc32 crc-high crc-low input-buffer bytes-written)
-      (setf crc-high tmp-crc-high
-            crc-low tmp-crc-low))
-    (setf (input-pos stream) 0)))
+                                     :end end))))
+    (setf (deflate-stream stream)  (make-instance 'salza2:gzip-compressor :callback callback))))
 
 (defmethod stream-write-byte ((stream gzip-output-stream) byte)
   (declare (type integer byte))
-  (with-slots (input-buffer) stream
-    (setf (aref (the salza-types:octet-vector input-buffer)
-                (the fixnum (input-pos stream)))
-          byte)
-    (incf (the fixnum (input-pos stream)))
-    (when (>= (the fixnum (input-pos stream)) +buffer-size+)
-      (gzip-stream-output stream +buffer-size+))))
+  (salza2:compress-octet byte (deflate-stream stream)))
 
 (defmethod stream-force-output ((stream gzip-output-stream))
-  (unless (zerop (the fixnum (input-pos stream)))
-    (gzip-stream-output stream (input-pos stream)))
-  (call-next-method)
-  (force-output (under-file stream))
   (values))
 
 (defmethod stream-finish-output ((stream gzip-output-stream))
-  (flet ((write-uint32 (value output)
-           (declare (type octet value))
-           (write-byte (ldb (byte 8 0) value) output)
-           (write-byte (ldb (byte 8 8) value) output)
-           (write-byte (ldb (byte 8 16) value) output)
-           (write-byte (ldb (byte 8 24) value) output)))
-    (with-slots (input-buffer underlying-file crc-high crc-low size finished) stream
-      (unless (zerop (the fixnum (input-pos stream)))
-        (gzip-stream-output stream (input-pos stream)))
-      (salza-deflate:finish-deflate-stream (slot-value stream 'deflate-stream ))
-      (setf crc-high (logxor crc-high #xFFFF)
-            crc-low (logxor crc-low #xFFFF))
-      (write-uint32 (logior (ash crc-high 16) crc-low) underlying-file)
-      (write-uint32 size underlying-file)
-      (call-next-method)
-      (finish-output underlying-file)))
+  (salza2:finish-compression (deflate-stream stream))
+  (finish-output (under-file stream))
   (values))
   
 (defmethod stream-clear-output ((stream gzip-output-stream))
-  (setf (input-pos stream) 0)
-  (call-next-method)
-  (values))
+  (error "Cannot clear output of gzip output streams."))
 
-;; I think this is broken
+
+;; for some reason lispworks needs this otherwise the gzip function doesn't work
+;; will investigate at some stage.
 #+lispworks
-(defmethod stream:stream-write-sequence ((stream gzip-output-stream) sequence start end) 
-  (declare (optimize speed (safety 1) (debug 0))
-           (type fixnum start end))
-  (assert (< start end))
-  (let ((size-to-write (- end start))
-        (written 0)
-        (input-buffer (slot-value stream 'input-buffer)))
-    (declare (type fixnum written size-to-write))
-    (loop while (< written size-to-write) do
-          (let ((to-write (min (- +buffer-size+ (input-pos stream))
-                               end)))
-            (salza-deflate::octet-replace input-buffer
-                                          sequence
-                                          (input-pos stream) (1- +buffer-size+)
-                                          start to-write)
-            (incf (the fixnum (input-pos stream)) to-write)
-            (incf written to-write)
-            (gzip-stream-output stream (input-pos stream))))))
+(defmethod stream:stream-write-sequence ((stream gzip-output-stream) sequence start end)
+  (salza2:compress-octet-vector sequence (deflate-stream stream) :start start :end end))
 
 (defmethod close ((stream gzip-output-stream) &key abort)
   (unless abort
@@ -168,8 +88,7 @@
   (close (underfile-of stream) :abort abort))
 
 (defun fill-buffer (stream)
-  (with-slots (underfile read-buffer bit-reader data-buffer last-end)
-      stream
+  (with-slots (read-buffer bit-reader data-buffer last-end) stream
     (setf read-buffer
           (make-in-memory-input-stream 
            (with-output-to-sequence (tmp)
@@ -185,25 +104,20 @@
               (progn (fill-buffer stream) (stream-read-byte stream))
               :eof)
           next-byte))))
-                      
-
 
 (defmethod stream-read-char ((stream gzip-input-stream))
   "Reads the next character from the given STREAM.
-
 Returns :eof when end of file is reached."
   (let ((in-byte (read-byte stream nil nil)))
     (if in-byte
 	(code-char in-byte)
 	:eof)))
 
-
 (defmethod stream-read-line ((stream gzip-input-stream))
   "Reads the next line from the given gzip-input stream. The #\Newline
 is used as a line separator.
 
 Returns (STR . EOF-P). EOF-P is T when of end of file is reached."
-
   (declare (ignore recursive-p))
   (let ((res (make-string 80))
 	(len 80)
@@ -229,6 +143,7 @@ Returns (STR . EOF-P). EOF-P is T when of end of file is reached."
 	   (t
 	    (return (values (subseq res 0 index) t))))))))
 
+                      
 (defmethod stream-listen ((stream gzip-input-stream))
   (listen (underfile-of stream)))
 
