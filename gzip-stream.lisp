@@ -47,9 +47,10 @@
   (salza2:compress-octet-vector sequence (deflate-stream stream) :start start :end end))
 
 (defmethod close ((stream gzip-output-stream) &key abort)
-  (unless abort
-    (finish-output stream))
-  (close (under-file stream) :abort abort))
+  (when (open-stream-p (under-file stream))
+    (unless abort
+      (finish-output stream))
+    (close (under-file stream) :abort abort)))
 
 (defmethod stream-element-type ((stream gzip-output-stream))
   (stream-element-type (under-file stream)))
