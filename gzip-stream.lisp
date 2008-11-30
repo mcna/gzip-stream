@@ -27,10 +27,13 @@
 (declaim (type fixnum +buffer-size+))
 (defconstant +buffer-size+ 8192)
 
+(defun make-buffer ()
+  (make-array +buffer-size+ :element-type 'octet))
+
 ;; gzip stream
 (defclass gzip-output-stream (fundamental-binary-output-stream trivial-gray-stream-mixin)
   ((underlying-file :initarg :understream :accessor under-file)
-   (input-buffer :initform (make-array +buffer-size+ :element-type 'octet))
+   (input-buffer :initform (make-buffer))
    (input-pos :initform 0 :accessor input-pos :type fixnum)
    (deflate-stream :accessor deflate-stream)
    (size :initform 0 :type fixnum)
@@ -50,6 +53,10 @@
 (defmethod stream-write-byte ((stream gzip-output-stream) byte)
   (declare (type integer byte))
   (salza2:compress-octet byte (deflate-stream stream)))
+
+(defmethod stream-write-sequence ((stream gzip-output-stream) sequence start end &key)
+  (loop :for idx :from start :below end :do
+        (write-byte (aref sequence idx) stream)))
 
 (defmethod stream-force-output ((stream gzip-output-stream))
   (values))
@@ -96,7 +103,7 @@
   ((underfile :accessor underfile-of :initarg :understream)
    (read-buffer :accessor read-buffer-of :initform
                 (make-in-memory-input-stream ""))
-   (data-buffer :accessor data-buffer-of :initform (make-array (* 32 1024)))
+   (data-buffer :accessor data-buffer-of :initform (make-buffer))
    (bit-reader :accessor bit-reader-of :initform nil)
    (last-end :initform 0)))
 
@@ -129,6 +136,16 @@
               :eof)
           next-byte))))
 
+(defmethod stream-read-sequence ((stream gzip-input-stream) sequence start end &key)
+  (loop :for x :from (or start 0) :below (or end (length sequence))
+        :for bytes-read :from 0 :do
+        (let ((byte (read-byte stream nil nil)))
+          (if byte
+              (setf (aref sequence (+ start bytes-read)) byte)
+              (return-from stream-read-sequence bytes-read)))
+        :finally (return bytes-read)))
+
+      
 (defmethod stream-read-char ((stream gzip-input-stream))
   "Reads the next character from the given STREAM.
 Returns :eof when end of file is reached."
