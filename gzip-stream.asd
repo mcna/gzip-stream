@@ -4,11 +4,12 @@
 
 (defsystem gzip-stream
   :serial t
-  :version "0.1"
+  :version "0.2.8"
   :components ((:file "package")
                (:file "ifstar")
                (:file "inflate")
-               (:file "gzip-stream"))
-  :depends-on (:salza :flexi-streams :trivial-gray-streams))
+               (:file "gzip-stream")
+               (:file "gzip"))
+  :depends-on (:salza2 :flexi-streams :trivial-gray-streams))
 
 

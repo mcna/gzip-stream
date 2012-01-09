@@ -25,13 +25,13 @@
 (declaim (optimize speed (safety 1) (debug 1)))
 
 (declaim (type fixnum +buffer-size+))
-(defconstant +buffer-size+ 8192)
+(defconstant +buffer-size+ (* 32 1024))
 
 (defun make-buffer ()
   (make-array +buffer-size+ :element-type 'octet))
 
 ;; gzip stream
-(defclass gzip-output-stream (fundamental-binary-output-stream trivial-gray-stream-mixin)
+(defclass gzip-output-stream (trivial-gray-stream-mixin fundamental-binary-output-stream)
   ((underlying-file :initarg :understream :accessor under-file)
    (input-buffer :initform (make-buffer))
    (input-pos :initform 0 :accessor input-pos :type fixnum)
@@ -99,7 +99,7 @@
 
 
 ;;; Input
-(defclass gzip-input-stream (fundamental-binary-input-stream trivial-gray-stream-mixin)
+(defclass gzip-input-stream (trivial-gray-stream-mixin fundamental-binary-input-stream)
   ((underfile :accessor underfile-of :initarg :understream)
    (read-buffer :accessor read-buffer-of :initform
                 (make-in-memory-input-stream ""))
@@ -137,15 +137,15 @@
           next-byte))))
 
 (defmethod stream-read-sequence ((stream gzip-input-stream) sequence start end &key)
-  (loop :for x :from (or start 0) :below (or end (length sequence))
-        :for bytes-read :from 0 :do
-        (let ((byte (read-byte stream nil nil)))
-          (if byte
-              (setf (aref sequence (+ start bytes-read)) byte)
-              (return-from stream-read-sequence bytes-read)))
-        :finally (return bytes-read)))
+  (let ((start (or start 0))
+        (end (or end (length sequence))))
+    (loop :for index :from start :below end :do
+          (let ((byte (stream-read-byte stream)))
+            (if (eql byte :eof)
+                (return-from stream-read-sequence  index)
+                (setf (aref sequence index) byte)))
+          :finally (return end))))
 
-      
 (defmethod stream-read-char ((stream gzip-input-stream))
   "Reads the next character from the given STREAM.
 Returns :eof when end of file is reached."
@@ -207,6 +207,7 @@ Returns (STR . EOF-P). EOF-P is T when of end of file is reached."
          (close ,var :abort ,abort)))))
 
 (defun gzip (in-file out-file)
+  "GZIPS the contents of in-file and writes the output to outfile."
   (with-open-file (in-stream in-file :element-type 'octet)
     (with-open-gzip-file (out-stream out-file :direction :output 
                                      :element-type 'octet :if-exists :supersede)
@@ -217,6 +218,7 @@ Returns (STR . EOF-P). EOF-P is T when of end of file is reached."
       (truename out-file))))
 
 (defun gunzip (in-file out-file)
+  "Extracts the contents of GZIP file IN-FILE and writes the output to OUT-FILE."
   (with-open-gzip-file (ins in-file)
     (with-open-file (outs out-file :direction :output 
                           :element-type 'octet :if-exists :supersede)

@@ -27,5 +27,8 @@
   (:export #:gzip-output-stream #:gzip-input-stream
    #:gzip #:gunzip #:with-open-gzip-file
    #:make-gzip-input-stream #:make-gzip-output-stream
-   #:asdf-install-extractor))
+   #:asdf-install-extractor
+
+   ;; sequence gzipping
+   #:gzip-sequence #:gunzip-sequence))
 
