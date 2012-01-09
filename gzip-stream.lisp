@@ -107,8 +107,9 @@
    (bit-reader :accessor bit-reader-of :initform nil)
    (last-end :initform 0)))
 
-(defmethod initialize-instance :after ((obj gzip-input-stream) &rest args)
-  (skip-gzip-header (underfile-of obj))
+(defmethod initialize-instance :after ((obj gzip-input-stream) &key (skip-gzip-header-p t))
+  (when skip-gzip-header-p
+    (skip-gzip-header (underfile-of obj)))
   (setf (bit-reader-of obj)
         (new-bit-reader (underfile-of obj))))
 
@@ -159,7 +160,6 @@ Returns :eof when end of file is reached."
 is used as a line separator.
 
 Returns (STR . EOF-P). EOF-P is T when of end of file is reached."
-  (declare (ignore recursive-p))
   (let ((res (make-string 80))
 	(len 80)
 	(index 0))
@@ -228,8 +228,9 @@ Returns (STR . EOF-P). EOF-P is T when of end of file is reached."
               (write-sequence buffer outs :start 0 :end x)))))
   (truename out-file))
 
-(defun make-gzip-input-stream (stream)
-  (make-instance 'gzip-input-stream :understream stream))
+(defun make-gzip-input-stream (stream &rest args &key skip-gzip-header-p)
+  (declare (ignore skip-gzip-header-p))
+  (apply #'make-instance 'gzip-input-stream :understream stream args))
 
 (defun make-gzip-output-stream (stream)
   (make-instance 'gzip-output-stream :understream stream))
